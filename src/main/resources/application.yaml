@@ -1,0 +1,28 @@
+server:
+  port: 8080
+spring:
+  application:
+    name: elasticSearchDemo
+  elasticsearch:
+    uris:
+      - http://127.0.0.1:9200
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 10MB
+powerjob:
+  worker:
+    enabled: true
+    allow-lazy-connect-server: false
+    app-name: elasticSearchDemo
+    port: 27777
+    server-address: 127.0.0.1:7700
+    protocol: "HTTP"
+    store-strategy: DISK
+    max-result-length: 4096
+    max-appended-wf-context-length: 4096
+minio:
+  access-key: minioadmin
+  secret-key: minioadmin
+  url: http://127.0.0.1:9000
+  bucket-name: test
