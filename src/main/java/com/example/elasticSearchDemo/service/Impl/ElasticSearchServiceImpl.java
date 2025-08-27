@@ -105,7 +105,7 @@ public class ElasticSearchServiceImpl implements ElasticSearchService {
                             .index(indexName)
                             .id(student.getId())
                             .doc(student)
-                            , Student.class
+                    , Student.class
             );
             return update.id();
         } catch (IOException e) {
@@ -131,8 +131,9 @@ public class ElasticSearchServiceImpl implements ElasticSearchService {
                 SearchResponse<Student> response = executeEsQuery(lastSyncTime, searchAfter);
                 List<Hit<Student>> hits = response.hits().hits();
 
-                if (hits.isEmpty()) break;
-
+                if (hits.isEmpty()) {
+                    break;
+                }
                 allHits.addAll(hits);
                 //获取最后一个文档的排序值作为下一页游标
                 Hit<Student> lastHit = hits.get(hits.size() - 1);
@@ -184,9 +185,6 @@ public class ElasticSearchServiceImpl implements ElasticSearchService {
             log.info("未找到修改时间大于 {} 的文件", lastSyncTime);
             return "无增量数据";
         }
-        Instant latestModifiedTime = modifiedObjects.values().stream()
-                .max(Instant::compareTo)
-                .orElse(lastSyncTime);
 
         int successCount = 0;
         int failureCount = 0;
@@ -210,6 +208,10 @@ public class ElasticSearchServiceImpl implements ElasticSearchService {
                 log.error("处理文件失败: {} - {}", objectName, e.getMessage(), e);
             }
         }
+        //获取最大修改时间
+        Instant latestModifiedTime = modifiedObjects.values().stream()
+                .max(Instant::compareTo)
+                .orElse(lastSyncTime);
         //更新时间戳
         SyncTimestampManager.saveLastSyncTime(SyncTimestampManager.SYNC_FILE_ES, latestModifiedTime);
         log.info("更新Minio同步时间戳: {}", latestModifiedTime);
@@ -228,31 +230,16 @@ public class ElasticSearchServiceImpl implements ElasticSearchService {
         try {
             ObjectMapper mapper = new ObjectMapper();
             mapper.registerModule(new JavaTimeModule());
-            mapper.setDateFormat(new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS"));
             mapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
-            JsonNode root = mapper.readTree(fileContent);
-
-            if (root.isArray()) {
-                if (root.isEmpty()) {
-                    throw new RuntimeException("JSON数组为空，无法解析为学生对象");
-                }
-                // 取数组中的第一个元素
-                JsonNode firstElement = root.get(0);
-                return mapper.treeToValue(firstElement, Student.class);
-            }else if (root.isObject()) {
-                //解析整个对象
-                return mapper.treeToValue(root, Student.class);
-            }
-            // 处理无效JSON格式
-            else {
-                throw new RuntimeException("无效的JSON格式，必须是对象或数组");
-            }
+            // 文件内容就是一个 JSON 对象，直接反序列化
+            return mapper.readValue(fileContent, Student.class);
         } catch (Exception e) {
             log.error("文件解析失败 - 文件名: {} - 内容: {}", objectName, fileContent);
             throw new RuntimeException("解析学生数据失败: " + objectName, e);
         }
     }
+
 
     /**
      * 封装ES查询逻辑
@@ -263,19 +250,16 @@ public class ElasticSearchServiceImpl implements ElasticSearchService {
      */
     private SearchResponse<Student> executeEsQuery(Instant lastSyncTime, List<FieldValue> searchAfter) throws IOException {
 
-        String formattedTime = DateTimeFormatter.ISO_INSTANT.format(
-                Instant.ofEpochMilli(lastSyncTime.toEpochMilli())
-        );
-        RangeQuery rangeQuery = RangeQuery.of(r -> r
-                .field("updateTime")
-                .gt(JsonData.of(formattedTime))
-        );
+        String formattedTime = DateTimeFormatter.ISO_INSTANT.format(lastSyncTime);
 
         SearchRequest.Builder builder = new SearchRequest.Builder()
                 .index(indexName)
-                .size(1000) // 分页大小
+                .size(1000)
                 .query(q -> q
-                        .range(rangeQuery)
+                        .range(r -> r
+                                .field("updateTime")
+                                .gt(JsonData.of(formattedTime))
+                        )
                 )
                 .sort(so -> so
                         .field(f -> f
@@ -309,43 +293,32 @@ public class ElasticSearchServiceImpl implements ElasticSearchService {
      */
     private String saveMinio(List<Hit<Student>> hits) {
         try {
-            // 1. 将数据转换为JSON字符串
-            StringBuilder jsonBuilder = new StringBuilder("[");
-            for (int i = 0; i < hits.size(); i++) {
-                Student student = hits.get(i).source();
-                jsonBuilder.append("{");
+            for (Hit<Student> hit : hits) {
+                Student student = hit.source();
                 assert student != null;
-                jsonBuilder.append("\"id\":\"").append(student.getId()).append("\",");
-                jsonBuilder.append("\"name\":\"").append(student.getName()).append("\",");
-                jsonBuilder.append("\"age\":").append(student.getAge()).append(",");
-                jsonBuilder.append("\"sex\":\"").append(student.getSex()).append("\",");
-                jsonBuilder.append("\"updateTime\":\"").append(student.getUpdateTime()).append("\"");
-                jsonBuilder.append("}");
+                ObjectMapper mapper = new ObjectMapper();
+                mapper.registerModule(new JavaTimeModule());
 
-                if (i < hits.size() - 1) {
-                    jsonBuilder.append(",");
-                }
+                // 转换为 JSON
+                String json = mapper.writeValueAsString(student);
+
+                MultipartFile multipartFile = getMultipartFile(json);
+                minioUtils.upload(multipartFile, "test");
             }
-            jsonBuilder.append("]");
-
-            MultipartFile multipartFile = getMultipartFile(jsonBuilder);
-
-            // 4. 调用MinioUtils上传
-            return minioUtils.upload(multipartFile, "test");
-
+            return "保存成功，共 " + hits.size() + " 个学生";
         } catch (Exception e) {
-            System.err.println("保存到MinIO失败: " + e.getMessage());
+            log.error("保存到MinIO失败", e);
             return null;
         }
     }
 
+
     /**
      * 转换文件
-     * @param jsonBuilder 原始数据
+     * @param jsonData 原始数据
      * @return 转换文件
      */
-    private static MultipartFile getMultipartFile(StringBuilder jsonBuilder) {
-        String jsonData = jsonBuilder.toString();
+    private static MultipartFile getMultipartFile(String jsonData) {
         byte[] content = jsonData.getBytes(StandardCharsets.UTF_8);
 
         //创建MockMultipartFile
