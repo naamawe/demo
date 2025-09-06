@@ -1,6 +1,6 @@
 package com.example.elasticSearchDemo.controller;
 
-import com.example.elasticSearchDemo.pojo.Student;
+import com.example.elasticSearchDemo.entity.Student;
 import com.example.elasticSearchDemo.service.ElasticSearchService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;

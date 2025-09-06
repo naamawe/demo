@@ -10,11 +10,12 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 
 @Component
-public class SyncTimestampManager {
+public class SyncTimestampUtil {
     
     // 文件路径常量
     public static final String SYNC_FILE_ES = "last_sync_es.txt";
     public static final String SYNC_FILE_MINIO = "last_sync_minio.txt";
+    public static final String SYNC_FILE_SERVER = "last_sync_server.txt";
 
     /**
      * 读取上次同步时间戳

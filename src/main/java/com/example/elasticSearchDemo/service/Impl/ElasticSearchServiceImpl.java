@@ -3,17 +3,17 @@ package com.example.elasticSearchDemo.service.Impl;
 import co.elastic.clients.elasticsearch.ElasticsearchClient;
 import co.elastic.clients.elasticsearch._types.FieldValue;
 import co.elastic.clients.elasticsearch._types.SortOrder;
-import co.elastic.clients.elasticsearch._types.query_dsl.RangeQuery;
 import co.elastic.clients.elasticsearch.core.*;
 import co.elastic.clients.elasticsearch.core.search.Hit;
 import co.elastic.clients.json.JsonData;
-import com.example.elasticSearchDemo.pojo.Student;
+import com.example.elasticSearchDemo.entity.FailedObjectInfo;
+import com.example.elasticSearchDemo.entity.ScanResult;
+import com.example.elasticSearchDemo.entity.Student;
 import com.example.elasticSearchDemo.service.ElasticSearchService;
 import com.example.elasticSearchDemo.util.ByteArrayMultipartFile;
 import com.example.elasticSearchDemo.util.MinioUtils;
-import com.example.elasticSearchDemo.util.SyncTimestampManager;
+import com.example.elasticSearchDemo.util.SyncTimestampUtil;
 import com.fasterxml.jackson.databind.DeserializationFeature;
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import lombok.extern.slf4j.Slf4j;
@@ -23,7 +23,6 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.text.SimpleDateFormat;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -120,9 +119,9 @@ public class ElasticSearchServiceImpl implements ElasticSearchService {
      */
     @Override
     public String getIncrementData(String bucketName) {
-        Instant lastSyncTime = SyncTimestampManager.readLastSyncTime(SyncTimestampManager.SYNC_FILE_ES);
+        Instant lastSyncTime = SyncTimestampUtil.readLastSyncTime(SyncTimestampUtil.SYNC_FILE_ES);
         log.info("ES开始增量同步, 上次同步时间: {}", lastSyncTime);
-
+        //获取增量数据
         try {
             //使用游标分页查询避免OOM
             List<Hit<Student>> allHits = new ArrayList<>();
@@ -156,7 +155,7 @@ public class ElasticSearchServiceImpl implements ElasticSearchService {
             String result = saveMinio(allHits);
             log.info("保存{}条数据到MinIO: {}", allHits.size(), result);
             //更新时间戳
-            SyncTimestampManager.saveLastSyncTime(SyncTimestampManager.SYNC_FILE_ES, maxUpdateTime);
+            SyncTimestampUtil.saveLastSyncTime(SyncTimestampUtil.SYNC_FILE_ES, maxUpdateTime);
             log.info("更新ES同步时间戳: {}", maxUpdateTime);
 
             return String.format("成功保存%d条增量数据，下次同步时间: %s",
@@ -176,49 +175,88 @@ public class ElasticSearchServiceImpl implements ElasticSearchService {
      * @return 结果
      */
     public String saveIncrementData(String bucketName) {
-        Instant lastSyncTime = SyncTimestampManager.readLastSyncTime(SyncTimestampManager.SYNC_FILE_MINIO);
-        log.info("Minio开始增量同步, 上次同步时间: {}", lastSyncTime);
+        Instant lastSyncTime = SyncTimestampUtil.readLastSyncTime(SyncTimestampUtil.SYNC_FILE_MINIO);
+        log.info("MinIO 开始增量同步，上次同步时间: {}", lastSyncTime);
 
-        //获取增量数据
-        Map<String, Instant> modifiedObjects = minioUtils.listObjectsModifiedAfter(bucketName, lastSyncTime);
-        if (modifiedObjects.isEmpty()){
-            log.info("未找到修改时间大于 {} 的文件", lastSyncTime);
-            return "无增量数据";
+        // 调用扫描方法获取增量对象
+        ScanResult scanResult = minioUtils.listObjectsModifiedAfter(bucketName, lastSyncTime);
+
+        // 获取扫描结果
+        Map<String, Instant> modifiedObjects = scanResult.getObjects();
+        boolean scanOverallSuccess = scanResult.isSuccess();
+        List<String> failedPrefixes = scanResult.getFailedPrefixes();
+        List<FailedObjectInfo> failedObjects = scanResult.getFailedObjects();
+
+        // 记录扫描失败的 prefix
+        if (!failedPrefixes.isEmpty()) {
+            log.error("严重：共 {} 个 prefix 扫描失败，可能导致数据遗漏！failedPrefixes={}",
+                    failedPrefixes.size(), failedPrefixes);
+            //TODO 存入失败桶
         }
 
+        // 记录元数据解析失败的对象（个别文件问题）
+        if (!failedObjects.isEmpty()) {
+            log.warn("共 {} 个对象元数据解析失败，可能丢失部分文件", failedObjects.size());
+            failedObjects.forEach(failure ->
+                    log.debug("元数据解析失败详情: {}", failure.toString())
+                    //TODO 存入失败桶
+            );
+        }
+
+        // 如果没有任何对象被成功扫描到，且整体扫描也不成功，应视为异常
+        if (modifiedObjects.isEmpty()) {
+            if (!scanOverallSuccess) {
+                log.error("扫描未成功完成，且无任何有效对象返回，可能存在严重问题。failedPrefixes={}, failedObjects={}",
+                        failedPrefixes.size(), failedObjects.size());
+                return "扫描失败：无数据返回且存在扫描错误，需排查";
+            } else {
+                log.info("未找到修改时间大于 {} 的文件", lastSyncTime);
+                return "无增量数据";
+            }
+        }
+
+        // 处理成功扫描到的对象
         int successCount = 0;
         int failureCount = 0;
-        //保存到ES
+
         for (Map.Entry<String, Instant> entry : modifiedObjects.entrySet()) {
             String objectName = entry.getKey();
             try {
-                //从MinIO获取文件内容
                 String fileContent = minioUtils.readObjectAsString(bucketName, objectName);
-
-                //解析文件内容
                 Student student = parseStudentFromFile(objectName, fileContent);
-
-                //保存到ES
                 saveStudent(student);
                 successCount++;
-
                 log.debug("成功保存学生数据: {} - {}", student.getId(), objectName);
             } catch (Exception e) {
                 failureCount++;
                 log.error("处理文件失败: {} - {}", objectName, e.getMessage(), e);
             }
         }
-        //获取最大修改时间
+
+        // 计算最新的最后修改时间
         Instant latestModifiedTime = modifiedObjects.values().stream()
                 .max(Instant::compareTo)
                 .orElse(lastSyncTime);
-        //更新时间戳
-        SyncTimestampManager.saveLastSyncTime(SyncTimestampManager.SYNC_FILE_ES, latestModifiedTime);
-        log.info("更新Minio同步时间戳: {}", latestModifiedTime);
 
-        return String.format("成功保存%d条增量数据，保存失败%d条增量数据，下次同步时间: %s",
-                successCount, failureCount, latestModifiedTime);
+        // 更新同步时间戳
+        SyncTimestampUtil.saveLastSyncTime(SyncTimestampUtil.SYNC_FILE_ES, latestModifiedTime);
+        log.info("更新 MinIO 同步时间戳: {}", latestModifiedTime);
+
+        // 构造最终返回信息，包含全面的状态摘要
+        String resultMessage = String.format(
+                "增量同步完成：成功保存%d条，失败%d条。" +
+                        "扫描状态=%s，failedPrefixes=%d，failedObjects=%d，下次同步时间=%s",
+                successCount, failureCount,
+                scanOverallSuccess ? "成功" : "部分失败",
+                failedPrefixes.size(),
+                failedObjects.size(),
+                latestModifiedTime
+        );
+
+        log.info(resultMessage);
+        return resultMessage;
     }
+
 
     /**
      * 解析json
@@ -272,11 +310,6 @@ public class ElasticSearchServiceImpl implements ElasticSearchService {
                                 .field("id.keyword")
                                 .order(SortOrder.Asc)
                         )
-                )
-                .source(src -> src
-                        .filter(f -> f
-                                .includes("id", "name", "age", "sex", "updateTime")
-                        )
                 );
 
         // 添加游标分页
@@ -320,7 +353,6 @@ public class ElasticSearchServiceImpl implements ElasticSearchService {
      */
     private static MultipartFile getMultipartFile(String jsonData) {
         byte[] content = jsonData.getBytes(StandardCharsets.UTF_8);
-
         //创建MockMultipartFile
         return new ByteArrayMultipartFile(
                 "increment_data",

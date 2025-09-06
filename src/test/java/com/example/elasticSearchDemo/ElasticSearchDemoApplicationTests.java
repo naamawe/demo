@@ -1,19 +1,21 @@
 package com.example.elasticSearchDemo;
 
-import com.example.elasticSearchDemo.pojo.Student;
+import com.example.elasticSearchDemo.entity.Student;
 import com.example.elasticSearchDemo.service.Impl.ElasticSearchServiceImpl;
+import com.example.elasticSearchDemo.util.IOUtils;
 import com.example.elasticSearchDemo.util.MinioUtils;
-import com.example.elasticSearchDemo.util.SyncTimestampManager;
+import com.example.elasticSearchDemo.util.SyncTimestampUtil;
 import io.minio.messages.Bucket;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.mock.web.MockMultipartFile;
 
-import java.sql.Timestamp;
+import java.io.File;
 import java.time.Instant;
-import java.time.LocalDateTime;
 import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.*;
 
 @SpringBootTest
 class ElasticSearchDemoApplicationTests {
@@ -22,6 +24,8 @@ class ElasticSearchDemoApplicationTests {
 	private MinioUtils minioUtils;
 	@Autowired
 	private ElasticSearchServiceImpl elasticSearchService;
+	@Autowired
+	private IOUtils ioUtils;
 
 	/**
 	 * 判断bucket是否存在
@@ -101,12 +105,12 @@ class ElasticSearchDemoApplicationTests {
 	@Test
 	void saveTimeTest() {
 //		SyncTimestampManager.saveLastSyncTime(SyncTimestampManager.SYNC_FILE_ES, Instant.now());
-		SyncTimestampManager.saveLastSyncTime(SyncTimestampManager.SYNC_FILE_MINIO, Instant.now());
+		SyncTimestampUtil.saveLastSyncTime(SyncTimestampUtil.SYNC_FILE_MINIO, Instant.now());
 	}
 
 	@Test
 	void readTimeTest() {
-		Instant instant = SyncTimestampManager.readLastSyncTime(SyncTimestampManager.SYNC_FILE_ES);
+		Instant instant = SyncTimestampUtil.readLastSyncTime(SyncTimestampUtil.SYNC_FILE_ES);
 		System.out.println(instant);
 	}
 
@@ -134,15 +138,32 @@ class ElasticSearchDemoApplicationTests {
 	//保存学生
 	@Test
 	void saveStudentTest() {
+		// 准备测试数据
 		Student student = new Student();
-		student.setId("4");
-		student.setName("王六");
+		student.setId("test-student-001");
+		student.setName("张三");
 		student.setAge(20);
 		student.setSex("男");
-		student.setCreateTime(Timestamp.valueOf(LocalDateTime.now()));
-		student.setUpdateTime(Timestamp.valueOf(LocalDateTime.now()));
-		String s = elasticSearchService.saveStudent(student);
-		System.out.println(s);
+		
+		java.util.Date currentDate = new java.util.Date();
+		student.setCreateTime(new java.sql.Date(currentDate.getTime()));
+		student.setUpdateTime(new java.sql.Date(currentDate.getTime()));
+		
+		// 执行保存操作
+		String result = elasticSearchService.saveStudent(student);
+		
+		// 验证操作结果
+		assertNotNull(result);
+		assertFalse(result.trim().isEmpty());
+		
+		// 验证数据确实被保存
+		Student savedStudent = elasticSearchService.getStudentById(student.getId());
+		assertNotNull(savedStudent);
+		assertEquals("张三", savedStudent.getName());
+		assertEquals(20, savedStudent.getAge());
+		
+		// 清理测试数据
+		elasticSearchService.deleteStudentById(student.getId());
 	}
 
 	//从Minio获取增量数据
@@ -150,6 +171,16 @@ class ElasticSearchDemoApplicationTests {
 	void saveIncrementData() {
 		String msg = elasticSearchService.saveIncrementData("test");
 		System.out.println(msg);
+	}
+
+	@Test
+	void testIO() {
+		File[] files = ioUtils.fullGetFileFromPath("src/main/resources/mydocument",
+				"explorer_objexp_biz_monitor_index_data",
+				"20250905");
+		for (File file : files) {
+			System.out.println(file.getName());
+		}
 	}
 
 }

@@ -1,6 +1,6 @@
 package com.example.elasticSearchDemo.service;
 
-import com.example.elasticSearchDemo.pojo.Student;
+import com.example.elasticSearchDemo.entity.Student;
 
 import java.util.List;
 
