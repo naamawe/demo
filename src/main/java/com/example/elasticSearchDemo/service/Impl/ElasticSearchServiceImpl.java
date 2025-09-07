@@ -16,8 +16,8 @@ import com.example.elasticSearchDemo.util.SyncTimestampUtil;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -34,9 +34,9 @@ import java.util.stream.Collectors;
 @Slf4j
 public class ElasticSearchServiceImpl implements ElasticSearchService {
 
-    @Autowired
+    @Resource
     private ElasticsearchClient esClient;
-    @Autowired
+    @Resource
     private MinioUtils minioUtils;
 
     String indexName = "student";
@@ -361,4 +361,6 @@ public class ElasticSearchServiceImpl implements ElasticSearchService {
                 content
         );
     }
+
+
 }

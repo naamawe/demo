@@ -1,7 +1,10 @@
 package com.example.elasticSearchDemo;
 
+import com.example.elasticSearchDemo.entity.IndexData;
 import com.example.elasticSearchDemo.entity.Student;
 import com.example.elasticSearchDemo.service.Impl.ElasticSearchServiceImpl;
+import com.example.elasticSearchDemo.strategy.FileParseStrategy;
+import com.example.elasticSearchDemo.strategy.factory.FileParseStrategyFactory;
 import com.example.elasticSearchDemo.util.IOUtils;
 import com.example.elasticSearchDemo.util.MinioUtils;
 import com.example.elasticSearchDemo.util.SyncTimestampUtil;
@@ -12,6 +15,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.mock.web.MockMultipartFile;
 
 import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
 import java.time.Instant;
 import java.util.List;
 
@@ -26,6 +31,8 @@ class ElasticSearchDemoApplicationTests {
 	private ElasticSearchServiceImpl elasticSearchService;
 	@Autowired
 	private IOUtils ioUtils;
+	@Autowired
+	private FileParseStrategyFactory strategyFactory;
 
 	/**
 	 * 判断bucket是否存在
@@ -183,4 +190,23 @@ class ElasticSearchDemoApplicationTests {
 		}
 	}
 
+	@Test
+	void testIndexDataParse() throws IOException {
+
+		File tempFile = File.createTempFile("index_data_test", ".txt");
+		try (FileWriter writer = new FileWriter(tempFile)) {
+			writer.write("id,name,age\n"); // 表头
+			writer.write("1,aaa,12\n");
+			writer.write("2,bbb,34\n");
+			writer.write("3,ccc,88\n");
+		}
+
+		FileParseStrategy<IndexData> strategy  = strategyFactory.getStrategy("index_data");
+		List<IndexData> result = IOUtils.parseFiles(new File[]{tempFile}, strategy);
+
+		assertEquals(3, result.size());
+		assertEquals("aaa", result.get(0).getName());
+		assertEquals(34, result.get(1).getAge());
+		assertEquals(3L, result.get(2).getId());
+	}
 }
